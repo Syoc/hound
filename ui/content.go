@@ -22,7 +22,7 @@ type renderer interface {
 type content struct {
 
 	// The uri for accessing this asset
-	uri string  //nolint
+	uri string //nolint
 
 	// The filename of the template relative to the asset directory
 	template string

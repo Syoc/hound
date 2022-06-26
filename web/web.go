@@ -60,8 +60,10 @@ func Start(cfg *config.Config, addr string, dev bool) *Server {
 		ch:  ch,
 	}
 
+	session := api.InitSession()
+
 	go func() {
-		ch <- http.ListenAndServe(addr, s)
+		ch <- http.ListenAndServe(addr, session.LoadAndSave(s))
 	}()
 
 	return s

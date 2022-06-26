@@ -132,17 +132,6 @@ var Model = {
       }
     };
 
-    if (typeof ModelData != 'undefined') {
-      var data = JSON.parse(ModelData),
-          repos = {};
-      for (var name in data) {
-        repos[name] = data[name];
-      }
-      this.repos = repos;
-      next();
-      return;
-    }
-
     $.ajax({
       url: 'api/v1/repos',
       dataType: 'json',
@@ -980,6 +969,10 @@ var App = React.createClass({
   render: function() {
     return (
       <div>
+        <a href="api/v1/oauth/gitlab"
+          className="link-gray">
+            Gitlab authorization
+        </a>
         <SearchBar ref="searchBar"
             q={this.state.q}
             i={this.state.i}

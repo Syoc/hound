@@ -35,9 +35,6 @@ type prdHandler struct {
 	// The collection of templated assets w/ their templates pre-parsed
 	content map[string]*content
 
-	// The config object as a json string
-	cfgJson string
-
 	// the config we are running on
 	cfg *config.Config
 }
@@ -84,11 +81,6 @@ func renderForDev(w io.Writer, root string, c *content, cfg *config.Config, r *h
 		return errors.New("invalid tplType for content")
 	}
 
-	json, err := cfg.ToJsonString()
-	if err != nil {
-		return err
-	}
-
 	var buf bytes.Buffer
 	for _, path := range c.sources {
 		fmt.Fprintf(&buf, "<script src=\"http://localhost:8080/ui/%s\"></script>", path)
@@ -97,7 +89,6 @@ func renderForDev(w io.Writer, root string, c *content, cfg *config.Config, r *h
 	return c.tpl.Execute(w, map[string]interface{}{
 		"ReactVersion":  ReactVersion,
 		"jQueryVersion": JQueryVersion,
-		"ReposAsJson":   json,
 		"Title":         cfg.Title,
 		"Source":        html_template.HTML(buf.String()),
 		"Host":          r.Host,
@@ -129,7 +120,7 @@ func (h *prdHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ct := h.content[p]
 	if ct != nil {
 		// if so, render it
-		if err := renderForPrd(w, ct, h.cfg, h.cfgJson, r); err != nil {
+		if err := renderForPrd(w, ct, h.cfg, r); err != nil {
 			log.Panic(err)
 		}
 		return
@@ -143,7 +134,7 @@ func (h *prdHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Renders a templated asset in prd-mode. This strategy will embed
 // the sources directly in a script tag on the templated page.
-func renderForPrd(w io.Writer, c *content, cfg *config.Config, cfgJson string, r *http.Request) error {
+func renderForPrd(w io.Writer, c *content, cfg *config.Config, r *http.Request) error {
 	var buf bytes.Buffer
 	buf.WriteString("<script>")
 	for _, src := range c.sources {
@@ -158,7 +149,6 @@ func renderForPrd(w io.Writer, c *content, cfg *config.Config, cfgJson string, r
 	return c.tpl.Execute(w, map[string]interface{}{
 		"ReactVersion":  ReactVersion,
 		"jQueryVersion": JQueryVersion,
-		"ReposAsJson":   cfgJson,
 		"Title":         cfg.Title,
 		"Source":        html_template.HTML(buf.String()),
 		"Host":          r.Host,
@@ -217,15 +207,9 @@ func newPrdHandler(cfg *config.Config) (http.Handler, error) {
 		}
 	}
 
-	json, err := cfg.ToJsonString()
-	if err != nil {
-		return nil, err
-	}
-
 	return &prdHandler{
 		content: contents,
 		cfg:     cfg,
-		cfgJson: json,
 	}, nil
 }
 

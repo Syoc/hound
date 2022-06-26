@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
+	"github.com/hound-search/hound/authorization/oauth"
 )
 
 const (
@@ -25,14 +27,16 @@ type UrlPattern struct {
 }
 
 type Repo struct {
-	Url               string         `json:"url"`
-	MsBetweenPolls    int            `json:"ms-between-poll"`
-	Vcs               string         `json:"vcs"`
-	VcsConfigMessage  *SecretMessage `json:"vcs-config"`
-	UrlPattern        *UrlPattern    `json:"url-pattern"`
-	ExcludeDotFiles   bool           `json:"exclude-dot-files"`
-	EnablePollUpdates *bool          `json:"enable-poll-updates"`
-	EnablePushUpdates *bool          `json:"enable-push-updates"`
+	AccessKeys         []string       `json:"access-keys"`
+	OAuthAuthorization *bool          `json:"oauth-authorization"`
+	Url                string         `json:"url"`
+	MsBetweenPolls     int            `json:"ms-between-poll"`
+	Vcs                string         `json:"vcs"`
+	VcsConfigMessage   *SecretMessage `json:"vcs-config"`
+	UrlPattern         *UrlPattern    `json:"url-pattern"`
+	ExcludeDotFiles    bool           `json:"exclude-dot-files"`
+	EnablePollUpdates  *bool          `json:"enable-poll-updates"`
+	EnablePushUpdates  *bool          `json:"enable-push-updates"`
 }
 
 // Used for interpreting the config value for fields that use *bool. If a value
@@ -42,6 +46,48 @@ func optionToBool(val *bool, def bool) bool {
 		return def
 	}
 	return *val
+}
+
+func iterateCompare(iterator []string, value string) bool {
+	for _, candidate := range iterator {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
+}
+
+// Extremly simple access check. Key is passed from header in
+// API HTTP request. No check in config = open for all.
+// A list of repo URLs with access is also accepted
+func (r *Repo) CheckAccess(accessKey string, repoURLs []string) bool {
+	if r.AccessKeys != nil {
+		if iterateCompare(r.AccessKeys, accessKey) {
+			return true
+		}
+	} else if r.OAuthAuthorization != nil {
+		if iterateCompare(repoURLs, r.Url) {
+			return true
+		}
+	} else {
+		return true
+	}
+	return false
+}
+
+// Hide some fields from json marshaling
+func (r *Repo) MarshalJSON() ([]byte, error) {
+	type NoSecrets Repo
+	noSecrets := NoSecrets{
+		Url:               r.Url,
+		MsBetweenPolls:    r.MsBetweenPolls,
+		Vcs:               r.Vcs,
+		UrlPattern:        r.UrlPattern,
+		ExcludeDotFiles:   r.ExcludeDotFiles,
+		EnablePollUpdates: r.EnablePollUpdates,
+		EnablePushUpdates: r.EnablePushUpdates,
+	}
+	return json.Marshal(noSecrets)
 }
 
 // Are polling based updates enabled on this repo?
@@ -61,17 +107,14 @@ type Config struct {
 	MaxConcurrentIndexers int                       `json:"max-concurrent-indexers"`
 	HealthCheckURI        string                    `json:"health-check-uri"`
 	VCSConfigMessages     map[string]*SecretMessage `json:"vcs-config"`
+	GitlabKeys            map[string]*Gitlab        `json:"gitlab-sync"`
+	OAuth2Gitlab          *oauth.OAuth2             `json:"gitlab-oauth"`
 }
 
 // SecretMessage is just like json.RawMessage but it will not
 // marshal its value as JSON. This is to ensure that vcs-config
 // is not marshalled into JSON and send to the UI.
 type SecretMessage []byte
-
-// This always marshals to an empty object.
-func (s *SecretMessage) MarshalJSON() ([]byte, error) {
-	return []byte("{}"), nil
-}
 
 // See http://golang.org/pkg/encoding/json/#RawMessage.UnmarshalJSON
 func (s *SecretMessage) UnmarshalJSON(b []byte) error {
@@ -204,18 +247,26 @@ func (c *Config) LoadFromFile(filename string) error {
 		c.DbPath = path
 	}
 
+	if c.OAuth2Gitlab != nil {
+		if err := c.OAuth2Gitlab.InitGitlab(); err != nil {
+			return err
+		}
+	}
+
+	if c.GitlabKeys != nil {
+		if c.Repos == nil {
+			c.Repos = map[string]*Repo{}
+		}
+
+		// Function will add to the Repos map directly
+		for _, gitlabOpts := range c.GitlabKeys {
+			gitlabOpts.GetGitlabRepos(c.Repos)
+		}
+	}
+
 	for _, repo := range c.Repos {
 		initRepo(repo)
 	}
 
 	return initConfig(c)
-}
-
-func (c *Config) ToJsonString() (string, error) {
-	b, err := json.Marshal(c.Repos)
-	if err != nil {
-		return "", err
-	}
-
-	return string(b), nil
 }

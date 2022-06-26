@@ -10,9 +10,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hound-search/hound/authorization/oauth"
 	"github.com/hound-search/hound/config"
 	"github.com/hound-search/hound/index"
 	"github.com/hound-search/hound/searcher"
+
+	"github.com/alexedwards/scs/v2"
 )
 
 const (
@@ -23,6 +26,15 @@ const (
 type Stats struct {
 	FilesOpened int
 	Duration    int
+}
+
+var session *scs.SessionManager
+
+func InitSession() *scs.SessionManager {
+	session = scs.New()
+	session.Lifetime = time.Hour * 24 * 5
+
+	return session
 }
 
 func writeJson(w http.ResponseWriter, data interface{}, status int) {
@@ -89,7 +101,7 @@ func searchAll(
 		*filesOpened += r.res.FilesOpened
 	}
 
-	*duration = int(time.Now().Sub(startedAt).Seconds() * 1000)  //nolint
+	*duration = int(time.Now().Sub(startedAt).Seconds() * 1000) //nolint
 
 	return res, nil
 }
@@ -100,12 +112,19 @@ func parseAsBool(v string) bool {
 	return v == "true" || v == "1" || v == "fosho"
 }
 
-func parseAsRepoList(v string, idx map[string]*searcher.Searcher) []string {
+func parseAsRepoList(
+	v string,
+	idx map[string]*searcher.Searcher,
+	accessKey string,
+	authRepos []string) []string {
+
 	v = strings.TrimSpace(v)
 	var repos []string
 	if v == "*" {
 		for repo := range idx {
-			repos = append(repos, repo)
+			if idx[repo].Repo.CheckAccess(accessKey, authRepos) {
+				repos = append(repos, repo)
+			}
 		}
 		return repos
 	}
@@ -114,7 +133,9 @@ func parseAsRepoList(v string, idx map[string]*searcher.Searcher) []string {
 		if idx[repo] == nil {
 			continue
 		}
-		repos = append(repos, repo)
+		if idx[repo].Repo.CheckAccess(accessKey, authRepos) {
+			repos = append(repos, repo)
+		}
 	}
 	return repos
 }
@@ -160,11 +181,73 @@ func parseRangeValue(rv string) (int, int) {
 }
 
 func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
+	// Handle user requests for authorization
+	m.HandleFunc("/api/v1/oauth/gitlab", func(w http.ResponseWriter, r *http.Request) {
+		if oauth.GitlabConfig == nil {
+			http.Error(w, "No gitlab oauth configured", http.StatusBadRequest)
+		}
+		_, ok := session.Get(r.Context(), "gitlab-repos").([]string)
+		if ok {
+			http.Error(w, "Already authorized", http.StatusBadRequest)
+		}
+
+		var expiration = time.Now().Add(24 * time.Hour * 5)
+		state := oauth.GetStateCookie()
+		http.SetCookie(
+			w,
+			&http.Cookie{
+				Name:    "oauthstate",
+				Value:   state,
+				Expires: expiration,
+			})
+
+		authUrl := oauth.GitlabConfig.AuthCodeURL(state)
+		session.Put(r.Context(), "oauth-provider", "gitlab")
+		http.Redirect(w, r, authUrl, http.StatusTemporaryRedirect)
+	})
+
+	// OAuth2 provider will redirect back to this URL
+	m.HandleFunc("/api/v1/oauth/redirect", func(w http.ResponseWriter, r *http.Request) {
+		if err := oauth.VerifyState(r); err != nil {
+			http.Error(w, "Failed to verify auth cookie", http.StatusInternalServerError)
+		}
+		provider := session.GetString(r.Context(), "oauth-provider")
+		if provider == "gitlab" {
+			token, err := oauth.GetToken(r.FormValue("code"), oauth.GitlabConfig)
+			// TODO "Membership = true" might lead to confusion combined
+			// configuration possibilities. Should be configurable like gitlab-sync
+			gitlabOpts := &config.Gitlab{
+				Url:         oauth.GitlabHost,
+				Key:         token.AccessToken,
+				MaxProjects: 0,
+				Membership:  true,
+			}
+			authRepos, err := gitlabOpts.GetProjectURLs()
+			if err != nil {
+				http.Error(w, "Failed to retrieve projects", http.StatusInternalServerError)
+			}
+			session.Put(r.Context(), "gitlab-repos", authRepos)
+		} else {
+			http.Error(
+				w,
+				"Redirect action for oauth provider not implemented",
+				http.StatusInternalServerError)
+		}
+		http.Redirect(w, r, oauth.RedirectHost, http.StatusTemporaryRedirect)
+	})
 
 	m.HandleFunc("/api/v1/repos", func(w http.ResponseWriter, r *http.Request) {
+		accessKey := r.Header.Get("HOUND-ACCESS-KEY")
+		authRepos, ok := session.Get(r.Context(), "gitlab-repos").([]string)
+		if !ok {
+			authRepos = []string{""}
+		}
+
 		res := map[string]*config.Repo{}
 		for name, srch := range idx {
-			res[name] = srch.Repo
+			if srch.Repo.CheckAccess(accessKey, authRepos) {
+				res[name] = srch.Repo
+			}
 		}
 
 		writeResp(w, res)
@@ -172,9 +255,14 @@ func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
 
 	m.HandleFunc("/api/v1/search", func(w http.ResponseWriter, r *http.Request) {
 		var opt index.SearchOptions
+		accessKey := r.Header.Get("HOUND-ACCESS-KEY")
+		authRepos, ok := session.Get(r.Context(), "gitlab-repos").([]string)
+		if !ok {
+			authRepos = []string{""}
+		}
 
 		stats := parseAsBool(r.FormValue("stats"))
-		repos := parseAsRepoList(r.FormValue("repos"), idx)
+		repos := parseAsRepoList(r.FormValue("repos"), idx, accessKey, authRepos)
 		query := r.FormValue("q")
 		opt.Offset, opt.Limit = parseRangeValue(r.FormValue("rng"))
 		opt.FileRegexp = r.FormValue("files")
@@ -228,8 +316,13 @@ func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
 				http.StatusMethodNotAllowed)
 			return
 		}
+		accessKey := r.Header.Get("HOUND-ACCESS-KEY")
+		authRepos, ok := session.Get(r.Context(), "gitlab-repos").([]string)
+		if !ok {
+			authRepos = []string{""}
+		}
 
-		repos := parseAsRepoList(r.FormValue("repos"), idx)
+		repos := parseAsRepoList(r.FormValue("repos"), idx, accessKey, authRepos)
 
 		for _, repo := range repos {
 			searcher := idx[repo]
@@ -262,7 +355,7 @@ func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
 
 		type Webhook struct {
 			Repository struct {
-				Name string
+				Name      string
 				Full_name string
 			}
 		}
@@ -272,7 +365,7 @@ func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
 		err := json.NewDecoder(r.Body).Decode(&h)
 
 		if err != nil {
-		   writeError(w,
+			writeError(w,
 				errors.New(http.StatusText(http.StatusBadRequest)),
 				http.StatusBadRequest)
 			return
