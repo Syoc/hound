@@ -19,7 +19,6 @@ type Project struct {
 type Gitlab struct {
 	Key         string `json:"key"`
 	Url         string `json:"url"`
-	AccessKey   string `json:"access-key"`
 	Membership  bool   `json:"membership-required"`
 	Ownership   bool   `json:"ownership-required"`
 	MaxProjects int    `json:"maximum-projects"`
