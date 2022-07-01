@@ -51,7 +51,7 @@ func (o *OAuth2) InitGitlab() error {
 	GitlabHost = u.Scheme + "://" + u.Host
 	// Hostname for the webserver to redirect back to after authorization
 	RedirectHost = o.RedirectHost
-	log.Printf("OAuth redirect URL: %s", o.RedirectHost+"://"+RedirectURL)
+	log.Printf("OAuth redirect URL: %s", o.RedirectHost+RedirectURL)
 
 	return nil
 }
