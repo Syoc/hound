@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -116,7 +117,7 @@ func parseAsRepoList(
 	v string,
 	idx map[string]*searcher.Searcher,
 	accessKey string,
-	authRepos []string) []string {
+	authRepos config.StringSet) []string {
 
 	v = strings.TrimSpace(v)
 	var repos []string
@@ -186,7 +187,7 @@ func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
 		if oauth.GitlabConfig == nil {
 			http.Error(w, "No gitlab oauth configured", http.StatusBadRequest)
 		}
-		_, ok := session.Get(r.Context(), "gitlab-repos").([]string)
+		_, ok := session.Get(r.Context(), "gitlab-repos").(config.StringSet)
 		if ok {
 			http.Error(w, "Already authorized", http.StatusBadRequest)
 		}
@@ -226,7 +227,12 @@ func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
 			if err != nil {
 				http.Error(w, "Failed to retrieve projects", http.StatusInternalServerError)
 			}
-			session.Put(r.Context(), "gitlab-repos", authRepos)
+			s := make(config.StringSet)
+			for _, url := range authRepos {
+				s.Add(url)
+			}
+			gob.Register(config.StringSet{}) // scs session manager needs this
+			session.Put(r.Context(), "gitlab-repos", s)
 		} else {
 			http.Error(
 				w,
@@ -238,9 +244,9 @@ func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
 
 	m.HandleFunc("/api/v1/repos", func(w http.ResponseWriter, r *http.Request) {
 		accessKey := r.Header.Get("HOUND-ACCESS-KEY")
-		authRepos, ok := session.Get(r.Context(), "gitlab-repos").([]string)
+		authRepos, ok := session.Get(r.Context(), "gitlab-repos").(config.StringSet)
 		if !ok {
-			authRepos = []string{""}
+			authRepos = config.StringSet{}
 		}
 
 		res := map[string]*config.Repo{}
@@ -256,9 +262,9 @@ func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
 	m.HandleFunc("/api/v1/search", func(w http.ResponseWriter, r *http.Request) {
 		var opt index.SearchOptions
 		accessKey := r.Header.Get("HOUND-ACCESS-KEY")
-		authRepos, ok := session.Get(r.Context(), "gitlab-repos").([]string)
+		authRepos, ok := session.Get(r.Context(), "gitlab-repos").(config.StringSet)
 		if !ok {
-			authRepos = []string{""}
+			authRepos = config.StringSet{}
 		}
 
 		stats := parseAsBool(r.FormValue("stats"))
@@ -317,9 +323,9 @@ func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
 			return
 		}
 		accessKey := r.Header.Get("HOUND-ACCESS-KEY")
-		authRepos, ok := session.Get(r.Context(), "gitlab-repos").([]string)
+		authRepos, ok := session.Get(r.Context(), "gitlab-repos").(config.StringSet)
 		if !ok {
-			authRepos = []string{""}
+			authRepos = config.StringSet{}
 		}
 
 		repos := parseAsRepoList(r.FormValue("repos"), idx, accessKey, authRepos)

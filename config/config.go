@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -57,16 +58,28 @@ func iterateCompare(iterator []string, value string) bool {
 	return false
 }
 
+// Simple set to do lookups on later
+type StringSet map[string]struct{}
+
+func (s StringSet) Contains(candidate string) bool {
+	_, ok := s[candidate]
+	return ok
+}
+
+func (s StringSet) Add(v string) {
+	s[v] = struct{}{}
+}
+
 // Extremly simple access check. Key is passed from header in
 // API HTTP request. No check in config = open for all.
 // A list of repo URLs with access is also accepted
-func (r *Repo) CheckAccess(accessKey string, repoURLs []string) bool {
+func (r *Repo) CheckAccess(accessKey string, s StringSet) bool {
 	if r.AccessKeys != nil {
 		if iterateCompare(r.AccessKeys, accessKey) {
 			return true
 		}
 	} else if r.OAuthAuthorization != nil {
-		if iterateCompare(repoURLs, r.Url) {
+		if s.Contains(r.Url) {
 			return true
 		}
 	} else {
