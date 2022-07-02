@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -23,6 +25,8 @@ func init() {
 type GitDriver struct {
 	DetectRef     bool   `json:"detect-ref"`
 	Ref           string `json:"ref"`
+	Username      string `json:"username"`
+	Password      string `json:"password"`
 	refDetetector refDetetector
 }
 
@@ -127,14 +131,46 @@ func (g *GitDriver) targetRef(dir string) string {
 	return targetRef
 }
 
+// Create a file with credentials on the format
+// git-credential-store expects
+func (g *GitDriver) authFile(
+	dir string, repoName string, gitPath string,
+) (string, error) {
+	fName := filepath.Join(dir, "."+repoName+"-credentials")
+	u, err := url.Parse(gitPath)
+	if err != nil {
+		return "", err
+	}
+	if !exists(fName) {
+		f, err := os.Create(fName)
+		if err != nil {
+			return "", err
+		}
+		credential := fmt.Sprintf(
+			"%s://%s:%s@%s\n", u.Scheme, g.Username, g.Password, u.Host)
+		if _, err := f.WriteString(credential); err != nil {
+			return "", err
+		}
+		if err := f.Chmod(0600); err != nil {
+			return "", err
+		}
+	}
+	return fName, nil
+}
+
 func (g *GitDriver) Clone(dir, url string) (string, error) {
 	par, rep := filepath.Split(dir)
-	cmd := exec.Command(
-		"git",
-		"clone",
-		"--depth", "1",
-		url,
-		rep)
+	cmdOpts := []string{"clone", "--depth", "1", url, rep}
+	if g.Username != "" && g.Password != "" {
+		fName, err := g.authFile(par, rep, url)
+		if err != nil {
+			log.Printf("Failed to setup git credential helper: %v", err)
+		} else {
+			cmdOpts = append(
+				cmdOpts, "--config", "credential.helper=store --file "+fName)
+		}
+	}
+	cmd := exec.Command("git", cmdOpts...)
 	cmd.Dir = par
 	out, err := cmd.CombinedOutput()
 	if err != nil {

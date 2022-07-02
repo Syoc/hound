@@ -215,7 +215,7 @@ func Setup(m *http.ServeMux, idx map[string]*searcher.Searcher) {
 		provider := session.GetString(r.Context(), "oauth-provider")
 		if provider == "gitlab" {
 			token, err := oauth.GetToken(r.FormValue("code"), oauth.GitlabConfig)
-			// TODO "Membership = true" might lead to confusion combined
+			// TODO "Membership = true" might lead to confusion combined with the
 			// configuration possibilities. Should be configurable like gitlab-sync
 			gitlabOpts := &config.Gitlab{
 				Url:         oauth.GitlabHost,
