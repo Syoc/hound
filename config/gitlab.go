@@ -23,6 +23,8 @@ type Gitlab struct {
 	Ownership   bool   `json:"ownership-required"`
 	MaxProjects int    `json:"maximum-projects"`
 	Template    *Repo  `json:"repo-options"`
+	Ignore		[]string `json:"ignore-repo-urls"`
+	ignoreSet	StringSet
 }
 
 // Set gitlab default options
@@ -124,6 +126,12 @@ func (g *Gitlab) GetGitlabRepos(repos map[string]*Repo) {
 	if err != nil {
 		log.Panicf("Failed to access Gitlab API: %v\n", err)
 	}
+	g.ignoreSet = make(StringSet)
+	if g.Ignore != nil { // build a set of ignored project URLs
+		for _, v := range g.Ignore {
+			g.ignoreSet.Add(v)
+		}
+	}
 
 	for _, proj := range *projects {
 		if _, member := repos[proj.Name]; member {
@@ -131,6 +139,9 @@ func (g *Gitlab) GetGitlabRepos(repos map[string]*Repo) {
 				"Trying to add gitlab repo %s but there is already a defined config",
 				" entry for %s, gitlab repo will be skipped", proj.Name, proj.Name)
 			continue // do not risk overwriting manually added repo
+		}
+		if g.ignoreSet.Contains(proj.Url) {
+			continue
 		}
 		if g.Template != nil {
 			template := Repo(*g.Template)
